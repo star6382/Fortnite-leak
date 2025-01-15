@@ -1,0 +1,712 @@
+/* Post render hook */
+
+#include "../Menu/Menu.h"
+#include "../Menu/Config.h"
+
+#include "../includes.h"
+#include <xkeycheck.h>
+
+typedef void (*fnPostRender)(void*, void*);
+inline fnPostRender ogPostRender = 0;
+
+int Width = 0;
+int Height = 0;
+
+bool BIsValidPointer(void* Address) {
+
+    if (!Address) {
+        return false;
+    }
+
+    if ((IsBadReadPtr)(Address, 8)) {
+        return false;
+    }
+
+    return true;
+}
+
+
+//template <typename T>
+//static inline T* Cast(UObject* Object) {
+//
+//    if (Object && Object->IsA(T::StaticClass())) {
+//        return static_cast<T*>(Object);
+//    }
+//
+//    return nullptr;
+//}
+
+SDK::FVector2D WorldToScreen(UCanvas* Canvas, FVector WorldLocation) {
+    SDK::FVector ScreenLocation = Canvas->K2_Project(WorldLocation);
+
+    if (ScreenLocation.Z > 0.f) {
+        return SDK::FVector2D(ScreenLocation.X, ScreenLocation.Y);
+    }
+
+    return SDK::FVector2D(-1.f, -1.f);
+}
+
+template <typename T, bool ForceCast = false>
+static inline T* Cast(UObject* Object) {
+    if (ForceCast || (BIsValidPointer(Object) && Object->IsA(T::StaticClass()))) {
+        return (T*)Object;
+    }
+
+    return nullptr;
+}
+
+template<typename T>
+T CClamp(T Value, T Min, T Max)
+{
+    if (Value < Min)
+    {
+        return Min;
+    }
+    if (Value > Max)
+    {
+        return Max;
+    }
+    return Value;
+}
+
+float GetMappedRangeValueClamped(const FVector2D& InputRange, const FVector2D& OutputRange, float Value)
+{
+    float ClampedValue = CClamp(Value, InputRange.X, InputRange.Y);
+
+    float MappedValue = OutputRange.X + (OutputRange.Y - OutputRange.X) * ((ClampedValue - InputRange.X) / (InputRange.Y - InputRange.X));
+
+    return CClamp(MappedValue, OutputRange.X, OutputRange.Y);
+}
+
+bool Visuals = true;
+bool FovChangerTest = true;
+bool CameraVisibilityTest = false;
+bool CameraPerspective = false;
+bool ChangeCameraVisualEffects = false;
+bool NoCamreaShake = false;
+bool ExploitLighting = false;
+bool EnableVisualShadows = false;
+bool EnableDayLight = false;
+bool ChangeAtmosphereAffects = false;
+bool ChangeTrapMaterial = false;
+
+TArray<AActor*> PlayerPawns;
+
+FVector CameraLocation;
+FRotator CameraRotation;
+
+FMinimalViewInfo* MinimalViewInfo{};
+
+UDirectionalLightComponent* DirectionalLightComponent{};
+float DayLengthInSeconds{};
+float CurrentTimeOfDay{};
+
+UCameraComponent* FirstPersonCameraComponent;
+UCameraComponent* ThirdPersonCameraComponent;
+
+FLinearColor LerpUsingHSV(const FLinearColor& ColorA, const FLinearColor& ColorB, float Alpha)
+{
+    //float HueA{}, SaturationA{}, ValueA{};
+    //float HueB{}, SaturationB{}, ValueB{};
+
+    //ColorA.ToHSV(HueA, SaturationA, ValueA);
+    //ColorB.ToHSV(HueB, SaturationB, ValueB);
+
+    //float Hue = FMath::Lerp(HueA, HueB, Alpha);
+    //float Saturation = FMath::Lerp(SaturationA, SaturationB, Alpha);
+    //float Value = FMath::Lerp(ValueA, ValueB, Alpha);
+
+    return FLinearColor{};
+}
+
+static float Mini(float A, float B, float C) {
+    return min(min(A, B), C);
+}
+
+static float Maxi(float A, float B, float C) {
+    return max(max(A, B), C);
+}
+
+const FLinearColor FLinearColor::Black = FLinearColor(0.0f, 0.0f, 0.0f);
+const FLinearColor FLinearColor::TransparentBlack = FLinearColor(0.0f, 0.0f, 0.0f, 0.45f);
+const FLinearColor FLinearColor::White = FLinearColor(1.0f, 1.0f, 1.0f);
+const FLinearColor FLinearColor::Red = FLinearColor(1.0f, 0.0f, 0.0f);
+const FLinearColor FLinearColor::Green = FLinearColor(0.0f, 1.0f, 0.0f);
+const FLinearColor FLinearColor::Blue = FLinearColor(0.0f, 0.0f, 1.0f);
+
+//void DrawMiniMap(UCanvas* Canvas, UGameViewportClient* Viewport)
+//{
+//    if (!Viewport || !Canvas) return;
+//
+//    FVector OutMin(FLT_MAX, FLT_MAX, FLT_MAX);
+//
+//    FVector OutMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+//
+//    const FVector2D MiniMapSize = FVector2D(200.0f, 200.0f);
+//
+//    const FVector2D MiniMapPosition = FVector2D(Canvas->ClipX - MiniMapSize.X - 10.0f, Canvas->ClipY - MiniMapSize.Y - 10.0f);
+//
+//    Canvas->K2_DrawBox(MiniMapPosition, MiniMapSize, 1.0f, FLinearColor::Black);
+//
+//    TArray<AActor*> MiniPawns{};
+//
+    //APawn* MiniMapDefaultPawn{};
+
+    //MiniMapDefaultPawn = UGameplayStatics::GetPlayerPawn(Viewport->World, 0);
+//
+//    UGameplayStatics::GetAllActorsOfClass(Viewport->World, AFortPawn::StaticClass(), &MiniPawns);
+//
+//    for (AActor* Actor : MiniPawns)
+//    {
+//        if (Actor && Actor->IsA(AFortPawn::StaticClass()) && Actor != MiniMapDefaultPawn)
+//        {
+//            FVector ActorOrigin, ActorExtent;
+//
+//            Actor->GetActorBounds(true, &ActorOrigin, &ActorExtent);
+//
+//            FVector ActorMin = ActorOrigin - ActorExtent;
+//            FVector ActorMax = ActorOrigin + ActorExtent;
+//
+//            OutMin.X = Mini(OutMin.X, ActorMin.X, ActorMax.X);
+//
+//            OutMin.Y = Mini(OutMin.Y, ActorMin.Y, ActorMax.Y);
+//
+//            OutMin.Z = Mini(OutMin.Z, ActorMin.Z, ActorMax.Z);
+//
+//            OutMax.X = Maxi(OutMax.X, ActorMin.X, ActorMax.X);
+//
+//            OutMax.Y = Maxi(OutMax.Y, ActorMin.Y, ActorMax.Y);
+//
+//            OutMax.Z = Maxi(OutMax.Z, ActorMin.Z, ActorMax.Z);
+//
+//            FVector ActorLocation = Actor->K2_GetActorLocation();
+//
+//            FVector2D MiniMapLocation;
+//
+//            MiniMapLocation.X = GetMappedRangeValueClamped(FVector2D(OutMin.X, OutMax.X), FVector2D(MiniMapPosition.X, MiniMapPosition.X + MiniMapSize.X), ActorLocation.X);
+//
+//            MiniMapLocation.Y = GetMappedRangeValueClamped(FVector2D(OutMin.Y, OutMax.Y), FVector2D(MiniMapPosition.Y, MiniMapPosition.Y + MiniMapSize.Y), ActorLocation.Y);
+//
+//            Canvas->K2_DrawBox(MiniMapLocation - FVector2D(2.0f, 2.0f), FVector2D(4.0f, 4.0f), 1.0f, FLinearColor::Green);
+//        }
+//    }
+//}
+
+//void DrawMiniMap(UCanvas* Canvas, UGameViewportClient* Viewport)
+//{
+//    if (!Viewport || !Canvas) return;
+//
+//    FVector2D RadarPosition(10.0f, 10.0f); // Initial radar position
+//    FVector2D RadarSize(200.0f, 200.0f);   // Initial radar size
+//    float RadarRange = 1000.0f;            // Range within which actors are considered
+//
+//    // Draw the radar background
+//    Canvas->K2_DrawBox(RadarPosition, RadarSize, 1.0f, FLinearColor::Black);
+//    Canvas->K2_DrawLine(RadarPosition, RadarPosition + FVector2D(RadarSize.X, 0), 1.0f, FLinearColor::Green);
+//    Canvas->K2_DrawLine(RadarPosition, RadarPosition + FVector2D(0, RadarSize.Y), 1.0f, FLinearColor::Green);
+//
+//    TArray<AActor*> PlayerPawns;
+//    UGameplayStatics::GetAllActorsOfClass(Viewport->World, AFortPawn::StaticClass(), &PlayerPawns);
+//
+//    APawn* MiniMapDefaultPawn{};
+//
+//    MiniMapDefaultPawn = UGameplayStatics::GetPlayerPawn(Viewport->World, 0);
+//
+//    FVector OutMin(FLT_MAX, FLT_MAX, FLT_MAX);
+//    FVector OutMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+//
+//    for (AActor* Actor : PlayerPawns)
+//    {
+//        if (Actor && Actor->IsA(AFortPawn::StaticClass()))
+//        {
+//            FVector ActorLocation = Actor->K2_GetActorLocation();
+//            FVector PlayerLocation = MiniMapDefaultPawn->K2_GetActorLocation();
+//
+//            if (Dist(PlayerLocation, ActorLocation) <= RadarRange)
+//            {
+//                FVector ActorOrigin, ActorExtent;
+//                Actor->GetActorBounds(true, &ActorOrigin, &ActorExtent);
+//
+//                FVector ActorMin = ActorOrigin - ActorExtent;
+//                FVector ActorMax = ActorOrigin + ActorExtent;
+//
+//                OutMin.X = Mini(OutMin.X, ActorMin.X, ActorMax.X);
+//                OutMin.Y = Mini(OutMin.Y, ActorMin.Y, ActorMax.Y);
+//                OutMin.Z = Mini(OutMin.Z, ActorMin.Z, ActorMax.Z);
+//
+//                OutMax.X = Maxi(OutMax.X, ActorMin.X, ActorMax.X);
+//                OutMax.Y = Maxi(OutMax.Y, ActorMin.Y, ActorMax.Y);
+//                OutMax.Z = Maxi(OutMax.Z, ActorMin.Z, ActorMax.Z);
+//            }
+//        }
+//    }
+//
+//    int32 ListIndex = 0;
+//
+//    for (AActor* Actor : PlayerPawns)
+//    {
+//        if (Actor && Actor->IsA(AFortPawn::StaticClass()))
+//        {
+//            FVector ActorLocation = Actor->K2_GetActorLocation();
+//            FVector PlayerLocation = UGameplayStatics::GetPlayerPawn(Viewport->World, 0)->K2_GetActorLocation();
+//
+//            if (Dist(PlayerLocation, ActorLocation) <= RadarRange)
+//            {
+//                FVector2D MiniMapLocation;
+//                MiniMapLocation.X = GetMappedRangeValueClamped(FVector2D(OutMin.X, OutMax.X), FVector2D(RadarPosition.X, RadarPosition.X + RadarSize.X), ActorLocation.X);
+//                MiniMapLocation.Y = GetMappedRangeValueClamped(FVector2D(OutMin.Y, OutMax.Y), FVector2D(RadarPosition.Y, RadarPosition.Y + RadarSize.Y), ActorLocation.Y);
+//
+//                MiniMapLocation.X = CClamp(MiniMapLocation.X, RadarPosition.X, RadarPosition.X + RadarSize.X);
+//                MiniMapLocation.Y = CClamp(MiniMapLocation.Y, RadarPosition.Y, RadarPosition.Y + RadarSize.Y);
+//
+//                Canvas->K2_DrawBox(MiniMapLocation - FVector2D(2.0f, 2.0f), FVector2D(4.0f, 4.0f), 1.0f, FLinearColor::Green);
+//
+//                FString ActorInfo = printf(("%s: (%.0f, %.0f)"), Actor->GetName().c_str(), ActorLocation.X, ActorLocation.Y);
+//
+//                FVector2D TextPosition = FVector2D(RadarPosition.X + 5.0f, RadarPosition.Y - 100.0f + 15.0f * ListIndex);
+//                Canvas->K2_DrawText(Game->Font, ActorInfo, TextPosition, FVector2D(1.0f, 1.0f), FLinearColor::White, 1.0f, FLinearColor::Black, FVector2D{0,0}, false, false, false, FLinearColor::Black);
+//                ListIndex++;
+//            }
+//        }
+//    }
+//}
+
+
+void BuildingTraps(UGameViewportClient* Viewport, FVector& OutMin, FVector& OutMax, UMaterialInterface* TrapMaterial = { 0 }, UCanvas* Canvas)
+{
+    TArray<AActor*> TrapActors;
+
+    UGameplayStatics::GetAllActorsOfClass(Viewport->World, ABuildingTrapFloor::StaticClass(), &TrapActors);
+
+    OutMin = FVector(FLT_MAX, FLT_MAX, FLT_MAX);
+    OutMax = FVector(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+
+    for (AActor* TrapActor : TrapActors)
+    {
+        UStaticMeshComponent* TrapComponent = Cast<UStaticMeshComponent>(TrapActor->GetComponentByClass(UStaticMeshComponent::StaticClass()));
+
+        if (TrapComponent)
+        {
+            FVector ActorOrigin, ActorExtent;
+            TrapComponent->GetLocalBounds(&ActorOrigin, &ActorExtent);
+
+            FVector ActorMin = ActorOrigin - ActorExtent;
+            FVector ActorMax = ActorOrigin + ActorExtent;
+
+            OutMin.X = Mini(OutMin.X, ActorMin.X, ActorMax.X);
+            OutMin.Y = Mini(OutMin.Y, ActorMin.Y, ActorMax.Y);
+
+            OutMin.Z = Mini(OutMin.Z, ActorMin.Z, ActorMax.Z);
+            OutMax.X = Maxi(OutMax.X, ActorMin.X, ActorMax.X);
+
+            OutMax.Y = Maxi(OutMax.Y, ActorMin.Y, ActorMax.Y);
+            OutMax.Z = Maxi(OutMax.Z, ActorMin.Z, ActorMax.Z);
+
+            if (TrapMaterial)
+            {
+                //TrapComponent->SetMaterial(0, TrapMaterial);
+                //TrapComponent->SetRenderCustomDepth(true);
+                //TrapComponent->CustomDepthStencilValue = 1;
+            }
+
+            FVector BoxCorners[8];
+            BoxCorners[0] = FVector(OutMin.X, OutMin.Y, OutMin.Z);
+            BoxCorners[1] = FVector(OutMax.X, OutMin.Y, OutMin.Z);
+            BoxCorners[2] = FVector(OutMin.X, OutMax.Y, OutMin.Z);
+            BoxCorners[3] = FVector(OutMax.X, OutMax.Y, OutMin.Z);
+            BoxCorners[4] = FVector(OutMin.X, OutMin.Y, OutMax.Z);
+            BoxCorners[5] = FVector(OutMax.X, OutMin.Y, OutMax.Z);
+            BoxCorners[6] = FVector(OutMin.X, OutMax.Y, OutMax.Z);
+            BoxCorners[7] = FVector(OutMax.X, OutMax.Y, OutMax.Z);
+
+            FVector2D ScreenLocation{};
+            FVector2D ScreenCorners[8];
+
+            for (int32 i = 0; i < 8; ++i)
+            {
+                FVector Screen3DLocation = Canvas->K2_Project(BoxCorners[i]);
+
+                ScreenLocation = FVector2D(Screen3DLocation.X, Screen3DLocation.Y);
+
+                ScreenCorners[i] = ScreenLocation;
+            }
+
+            for (int32 i = 0; i < 4; ++i)
+            {
+                Canvas->K2_DrawLine(ScreenCorners[i], ScreenCorners[(i + 1) % 4], 1.0f, FLinearColor::Red);
+                Canvas->K2_DrawLine(ScreenCorners[i + 4], ScreenCorners[(i + 1) % 4 + 4], 1.0f, FLinearColor::Red);
+                Canvas->K2_DrawLine(ScreenCorners[i], ScreenCorners[i + 4], 1.0f, FLinearColor::Red);
+            }
+
+            Canvas->K2_DrawLine(ScreenCorners[0], ScreenCorners[4], 1.0f, FLinearColor::Red);
+            Canvas->K2_DrawLine(ScreenCorners[1], ScreenCorners[5], 1.0f, FLinearColor::Red);
+            Canvas->K2_DrawLine(ScreenCorners[2], ScreenCorners[6], 1.0f, FLinearColor::Red);
+            Canvas->K2_DrawLine(ScreenCorners[3], ScreenCorners[7], 1.0f, FLinearColor::Red);
+
+
+            FString TrapText = (L"Trap");
+            Canvas->K2_DrawText(Game->Font, TrapText, ScreenLocation, FVector2D(1.0f, 1.0f), FLinearColor::White, 1.0f, FLinearColor::Black, FVector2D { 0, 0 }, true, true, true, FLinearColor::Black);
+        }
+    }
+}
+
+static UProperty* FindFieldByName(UClass* Class, const FName& PropertyName)
+{
+  /*  UProperty* It = { nullptr };
+
+    if (It->GetName().c_str())
+    {
+        return It;
+    }*/
+
+    return nullptr;
+}
+
+static UObject* GetObjectPropertyValue_InContainer(UObject* ContainerObject, const FName& PropertyName)
+{
+    if (!ContainerObject)
+    {
+        return nullptr;
+    }
+
+    UProperty* Property = FindFieldByName(ContainerObject->Class, PropertyName);
+    if (!Property)
+    {
+        return nullptr;
+    }
+
+    if (UObjectProperty* ObjectProperty = Cast<UObjectProperty>(Property))
+    {
+        return GetObjectPropertyValue_InContainer(ContainerObject, PropertyName);
+    }
+
+    return nullptr;
+}
+
+UTexture* GetDynamicTexture(UObject* Object, FName PropertyName)
+{
+    return Cast<UTexture>(GetObjectPropertyValue_InContainer(Object, PropertyName));
+}
+
+int32 A, B, C, D;
+
+void SetGuidValues(int32 InA, int32 InB, int32 InC, int32 InD)
+{
+    A = InA;
+    B = InB;
+    C = InC;
+    D = InD;
+}
+
+void GetGuidValues(int32& OutA, int32& OutB, int32& OutC, int32& OutD)
+{
+    OutA = A;
+    OutB = B;
+    OutC = C;
+    OutD = D;
+}
+
+inline int custom_compare(const char* X, const char* Y)
+{
+    while (*X && *Y) {
+        if (*X != *Y) {
+            return 0;
+        }
+        X++;
+        Y++;
+    }
+
+    return (*Y == '\0');
+}
+
+inline int custom_wcompare(const wchar_t* X, const wchar_t* Y)
+{
+    while (*X && *Y) {
+        if (*X != *Y) {
+            return 0;
+        }
+        X++;
+        Y++;
+    }
+
+    return (*Y == L'\0');
+}
+
+inline const wchar_t* _wcsstr(const wchar_t* X, const wchar_t* Y)
+{
+    while (*X != L'\0') {
+        if ((*X == *Y) && custom_wcompare(X, Y)) {
+            return X;
+        }
+        X++;
+    }
+    return NULL;
+}
+
+inline const char* _strstr(const char* X, const char* Y)
+{
+    while (*X != '\0') {
+        if ((*X == *Y) && custom_compare(X, Y)) {
+            return X;
+        }
+        X++;
+    }
+    return NULL;
+}
+
+void GetLightMapTextures(UTexture* MyTexture)
+{
+    std::vector<UTexture*> Textures;
+
+    MyTexture->LODBias += 2; 
+
+    MyTexture->SRGB = 1;
+
+    MyTexture->CompressionSettings = SDK::ETextureCompressionSettings::TC_VectorDisplacementmap;
+
+    Textures.push_back(MyTexture);
+
+    int32 NewLODBias = 0;
+
+    for (UTexture* Texture : Textures)
+    {
+        if (Texture)
+        {
+            Texture->LODBias = NewLODBias;
+
+            Texture->CompressionSettings = SDK::ETextureCompressionSettings::TC_Grayscale;
+        }
+    }
+
+    Textures.clear();
+}
+
+void ReplaceLightmap(UTexture* Texture, UTexture* NewLightmap)
+{
+    if (Texture && NewLightmap)
+    {
+        FGuid OldLightingGuid = Texture->LightingGuid;
+
+        FGuid NewLightingGuid = NewLightmap->LightingGuid;
+
+        OldLightingGuid = NewLightingGuid;
+
+        GetGuidValues(Texture->LightingGuid.A, Texture->LightingGuid.B, Texture->LightingGuid.C, Texture->LightingGuid.D);
+
+        GetGuidValues(NewLightmap->LightingGuid.A, NewLightmap->LightingGuid.B, NewLightmap->LightingGuid.C, NewLightmap->LightingGuid.D);
+
+        SetGuidValues(rand(), rand(), rand(), rand());
+
+        Texture->LightingGuid = NewLightingGuid;
+    }
+}
+
+//void OptimizeTextureForPlatform(UTexture* MyTexture)
+//{
+//    if (MyTexture)
+//    {
+//        const wchar_t* PlatformName = UGameplayStatics::GetPlatformName().CStr();
+//
+//        if (_wcsstr(PlatformName, (L"WIN"))) {
+//            MyTexture->LODBias = 0;
+//            MyTexture->CompressionSettings = SDK::ETextureCompressionSettings::TC_Default;
+//        }
+//
+//        else
+//        {
+//            MyTexture->LODBias = 1;
+//            MyTexture->CompressionSettings = SDK::ETextureCompressionSettings::TC_HDR;
+//        }
+//
+//    }
+//}
+
+bool lighting = false;
+void DrawTexture(UCanvas* Canvas, FVector2D& Head2D, FVector2D& Root2D) {
+
+    TArray<UTexture*> Textures;
+
+    UTexture2D* Texture = UObject::FindObject<UTexture2D>(("Texture2D GradientTexture0.GradientTexture0"));
+
+    if ( Texture ) {
+        Textures.Add( Texture );
+    }
+
+    FVector2D ScreenPosition = Head2D;
+
+    FVector2D ScreenSize(100, 100);
+
+    FVector2D CoordinatePosition(0, 0);
+
+    FVector2D CoordinateSize(1, 1);
+
+    FLinearColor RenderColor = FLinearColor::TransparentBlack;
+
+    EBlendMode BlendMode = EBlendMode::BLEND_Translucent;
+
+    float Rotation = 0.0f;
+
+    FVector2D PivotPoint(0.5f, 0.5f);
+
+    float HeightA = abs(Head2D.Y - Root2D.Y);
+
+    float WidthA = HeightA * 0.65f;
+
+    for (UTexture* Texture : Textures)
+    {
+        if (Texture)
+        {
+            Canvas->K2_DrawTexture(Texture, ScreenPosition, ScreenSize, CoordinatePosition, CoordinateSize, RenderColor, BlendMode, Rotation, PivotPoint);
+
+            ScreenPosition.Y += ScreenSize.Y + 10;
+
+            if (ScreenPosition.Y + ScreenSize.Y > Root2D.Y)
+            {
+                ScreenPosition.Y = Head2D.Y;
+
+                ScreenPosition.X += ScreenSize.X + 10;
+
+                if (ScreenPosition.X + ScreenSize.X > Head2D.X + WidthA) {
+                    break;
+                }
+
+            }
+        }
+    }
+
+}
+
+void DistanceHighlightColor(UCanvas* Canvas, UGameViewportClient* Viewport, APlayerController* PlayerController, APawn* PlayerPawn, FVector Root2D) {
+
+    float InteractionRange = 500.0f;
+
+    if (PlayerPawn)
+    {
+        FVector DistActor = PlayerPawn->K2_GetActorLocation();
+
+        float Distance = UKismetMathLibrary::Vector_Distance(DistActor, Root2D) * 0.01;
+
+        if (Distance <= InteractionRange)
+        {
+            float NormalizedDistance = 1.0f - (Distance / InteractionRange);
+
+            FLinearColor HighlightColor = FLinearColor::Red;
+            HighlightColor.A = CClamp(NormalizedDistance, 0.0f, 1.0f);
+
+            FVector Origin;
+
+            FVector BoxExtent;
+
+            PlayerPawn->GetActorBounds(false, &Origin, &BoxExtent);
+
+            FVector2D BoxMin = WorldToScreen(Canvas, Origin - BoxExtent);
+            FVector2D BoxMax = WorldToScreen(Canvas, Origin + BoxExtent);
+
+            FVector2D ScreenSize = BoxMax - BoxMin;
+            ScreenSize.X = CClamp(ScreenSize.X, 0.0f, 0.65f);
+
+            Canvas->K2_DrawBox(BoxMin, ScreenSize, 1.0f, HighlightColor);
+
+            FVector2D Head2D = WorldToScreen(Canvas, FVector(Origin.X, Origin.Y, Origin.Z + BoxExtent.Z));
+            FVector2D Root2D = WorldToScreen(Canvas, FVector(Origin.X, Origin.Y, Origin.Z - BoxExtent.Z));
+
+            DrawTexture(Canvas, Head2D, Root2D);
+        }
+    }
+
+}
+
+APlayerController* AAPlayerController;
+APawn* DefaultPawn;
+USkeletalMeshComponent* SkeletalMesh;
+
+inline void PostRender(UGameViewportClient* Viewport, UCanvas* Canvas)
+{
+    if (!Viewport || !Canvas)
+        return ogPostRender(Viewport, Canvas);
+
+    Width = Canvas->ClipX;
+
+    Height = Canvas->ClipY;
+
+    AAPlayerController = UGameplayStatics::GetPlayerController(Viewport->World, (int32)0);
+
+    Menu->Render(AAPlayerController, Canvas);
+
+   // bool bIsFreeCameraActive = false;
+
+    DefaultPawn = UGameplayStatics::GetPlayerPawn(Viewport->World, 0);
+
+    if (lighting) {
+        UTexture2D* Texture = UObject::FindObject<UTexture2D>(("Texture2D GradientTexture0.GradientTexture0"));
+
+        GetLightMapTextures(Texture);
+
+        ReplaceLightmap(Texture, UObject::FindObject<UTexture2D>(("Engine.Default__LightMapTexture2D")));
+    }
+
+  //  UObject* FreeCamera{};
+
+    //if (FovChangerTest) {
+    //   
+    //    float InitialFOV;
+
+    //    AActor* Owner = Game->ActorComponent->GetOwner();
+    //    if (Owner)
+    //    {
+    //        UCameraComponent* CameraComponent = Cast<UCameraComponent>(Owner->GetComponentByClass(UCameraComponent::StaticClass()));
+
+    //        if (CameraComponent)
+    //        {
+    //            InitialFOV = CameraComponent->FieldOfView;
+    //        }
+
+    //    }
+
+    //}
+
+    //static float LastUpdateTime = 0.0f;
+    //const float UpdateInterval = 1.0f;
+
+    //float CurrentTime = UGameplayStatics::GetTimeSeconds(Viewport->World);
+    //if (CurrentTime - LastUpdateTime > UpdateInterval)
+    //{
+    //    PlayerPawns.Clear();
+    //    UGameplayStatics::GetAllActorsOfClass(Viewport->World, AFortPawn::StaticClass(), &PlayerPawns);
+    //    LastUpdateTime = CurrentTime;
+    //}
+
+    UGameplayStatics::GetAllActorsOfClass(Viewport->World, AFortPawn::StaticClass(), &PlayerPawns);
+
+    for (AActor* Actor : PlayerPawns)
+    {
+        if (Actor && Actor != DefaultPawn)
+        {
+            SkeletalMesh = Cast< USkeletalMeshComponent >( Actor->GetComponentByClass( USkeletalMeshComponent::StaticClass ( ) ) );
+
+
+            if (SkeletalMesh)
+            {
+                FName HeadBoneName = SkeletalMesh->GetBoneName(Bones::Head);
+                FName RootBoneName = SkeletalMesh->GetBoneName(Bones::Root);
+
+                FVector Head3D = SkeletalMesh->GetSocketLocation(HeadBoneName);
+                FVector Root3D = SkeletalMesh->GetSocketLocation(RootBoneName);
+
+                FVector2D Head2D = WorldToScreen(Canvas, Head3D);
+                FVector2D Root2D = WorldToScreen(Canvas, Root3D);
+
+                float heightA = abs(Head2D.Y - Root2D.Y);
+                float widthA = heightA * 0.65f;
+
+                Canvas->K2_DrawBox({ Root2D.X - widthA / 2, Head2D.Y }, { widthA, heightA }, 1.f, FLinearColor{ 1.f, 1.f, 1.f, 1.f });
+
+
+
+
+            }
+        }
+    }
+
+    return ogPostRender(Viewport, Canvas);
+}
